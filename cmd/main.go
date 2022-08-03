@@ -24,9 +24,15 @@ func main() {
 
 	mylog.Println("listening server port ", Port)
 
+	handler := hdlwraper.NewHdlwraper()
+	handler.SetProxy(&hdlwraper.Proxy{
+		Ip:   "127.0.0.1",
+		Port: 3128,
+	})
+
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", Port),
-		Handler:      hdlwraper.NewHdlwraper(),
+		Handler:      handler,
 		ReadTimeout:  time.Minute * 10,
 		WriteTimeout: time.Minute * 10,
 	}
