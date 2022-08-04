@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/topcoder520/gosyproxy/hdlwraper"
@@ -13,8 +15,11 @@ import (
 
 var Port int
 
+var Proxy string
+
 func init() {
 	flag.IntVar(&Port, "p", 8888, "port")
+	flag.StringVar(&Proxy, "proxy", "", "port")
 }
 
 func main() {
@@ -25,10 +30,21 @@ func main() {
 	mylog.Println("listening server port ", Port)
 
 	handler := hdlwraper.NewHdlwraper()
-	handler.SetProxy(&hdlwraper.Proxy{
-		Ip:   "127.0.0.1",
-		Port: 3128,
-	})
+	if len(strings.TrimSpace(Proxy)) > 0 {
+		var ip string
+		var p uint64
+		if strings.Contains(Proxy, ":") {
+			ip = Proxy[:strings.Index(Proxy, ":")]
+			pp := Proxy[(strings.Index(Proxy, ":") + 1):]
+			p, _ = strconv.ParseUint(pp, 10, 64)
+		} else {
+			ip = Proxy
+		}
+		handler.SetProxy(&hdlwraper.Proxy{
+			Ip:   ip,
+			Port: uint(p),
+		})
+	}
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", Port),
