@@ -11,6 +11,7 @@ import (
 
 	"github.com/topcoder520/gosyproxy/hdlwraper"
 	"github.com/topcoder520/gosyproxy/mylog"
+	"github.com/topcoder520/gosyproxy/proxy"
 )
 
 var Port int
@@ -40,7 +41,7 @@ func main() {
 		} else {
 			ip = Proxy
 		}
-		handler.SetProxy(&hdlwraper.Proxy{
+		handler.SetProxy(&proxy.Proxy{
 			Ip:   ip,
 			Port: uint(p),
 		})

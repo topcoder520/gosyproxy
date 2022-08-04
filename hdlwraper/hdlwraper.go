@@ -3,53 +3,61 @@ package hdlwraper
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/topcoder520/gosyproxy/mylog"
+	"github.com/topcoder520/gosyproxy/proxy"
 )
 
 var Version = "0.1.0"
 
 type Hdlwraper struct {
-	Proxy *Proxy
+	Proxy *proxy.Proxy
 }
 
 func NewHdlwraper() *Hdlwraper {
 	return &Hdlwraper{}
 }
 
-func (hdl *Hdlwraper) SetProxy(proxy *Proxy) {
+func (hdl *Hdlwraper) SetProxy(proxy *proxy.Proxy) {
 	hdl.Proxy = proxy
 }
 
-func (hdl *Hdlwraper) ServeHTTP2(resp http.ResponseWriter, req *http.Request) {
-	b, _ := ioutil.ReadAll(req.Body)
-	defer req.Body.Close()
-	mylog.Printf("url=>%s://%s", strings.ToLower(req.Proto[0:strings.Index(req.Proto, "/")]), req.Host)
-	mylog.Println(req.Proto, req.Host, req.Method)
-	mylog.Println("body=>", string(b))
-	connIn, _, _ := resp.(http.Hijacker).Hijack()
-	defer connIn.Close()
-	connOut, _ := net.Dial("tcp", req.Host)
-	req.Header.Del("Proxy-Connection")
-	req.Header.Set("Connection", "keep-alive")
-	err := req.Write(connOut)
-	if err != nil {
-		mylog.Println("connOut=>", err)
-		return
+func (hdl *Hdlwraper) handleRequest(req *http.Request) (addr string) {
+	if hdl.Proxy != nil {
+		if len(strings.TrimSpace(hdl.Proxy.Ip)) == 0 {
+			mylog.Fatalln(errors.New("proxy ip is empty"))
+		}
+		addr = hdl.Proxy.String()
+		if req.Method == "CONNECT" {
+
+		} else {
+			//http请求
+			req.Header.Del("Connection")
+			req.Header.Set("Proxy-Connection", "Keep-Alive")
+			//设置代理服务器的时候Path要改为携带http的完整路径
+			req.URL.Path = req.URL.String()
+		}
+	} else {
+		addr = req.Host
+		if req.Method == "CONNECT" {
+			if !strings.Contains(addr, ":") {
+				addr = addr + ":443"
+			}
+		} else {
+			if !strings.Contains(addr, ":") {
+				addr = addr + ":80"
+			}
+			req.Header.Del("Proxy-Connection")
+			req.Header.Set("Connection", "Keep-Alive")
+		}
 	}
-	buf := bufio.NewReader(connOut)
-	resp2, err := http.ReadResponse(buf, req)
-	if err != nil {
-		mylog.Println("resp2=>", err)
-		return
-	}
-	resp2.Write(connIn)
+	return
 }
 
 func (hdl *Hdlwraper) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
@@ -60,28 +68,9 @@ func (hdl *Hdlwraper) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer connIn.Close()
-	var addr string
-	if hdl.Proxy != nil {
-		if len(strings.TrimSpace(hdl.Proxy.Ip)) == 0 {
-			mylog.Fatalln(errors.New("proxy ip is empty"))
-		}
-		addr = hdl.Proxy.String()
-	} else {
-		if req.Method == "CONNECT" {
-			//addr = fmt.Sprintf("%s://%s", strings.ToLower(req.Proto[0:strings.Index(req.Proto, "/")]), req.Host)
-			addr = req.Host
-			if !strings.Contains(addr, ":") {
-				addr = addr + ":443"
-			}
-		} else {
-			addr = req.Host
-			if !strings.Contains(addr, ":") {
-				addr = addr + ":80"
-			}
-		}
-	}
+	addr := hdl.handleRequest(req)
 
-	mylog.Println("remote address=> ", addr)
+	mylog.Println("remote address=> ", addr, fmt.Sprintf(" url=> %s %s", req.Method, req.URL.String()))
 	connOut, err := net.Dial("tcp", addr)
 	if err != nil {
 		mylog.Println("Dial out=>", err)
@@ -89,6 +78,7 @@ func (hdl *Hdlwraper) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	}
 	if req.Method == "CONNECT" {
 		if hdl.Proxy != nil {
+			//让代理连接 req.Host服务器
 			err := connectProxyServer(connOut, req.Host)
 			if err != nil {
 				mylog.Println("connectProxyServer=>", err)
@@ -105,8 +95,6 @@ func (hdl *Hdlwraper) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 			return
 		}
 	} else {
-		req.Header.Del("Proxy-Connection")
-		req.Header.Set("Connection", "Keep-Alive")
 		if err = req.Write(connOut); err != nil {
 			mylog.Println("send to server err", err)
 			return
