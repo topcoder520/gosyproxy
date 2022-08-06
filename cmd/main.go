@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,15 +20,39 @@ var Port int
 
 var Proxy string
 
+var logfile bool
+
 func init() {
 	flag.IntVar(&Port, "p", 8888, "port")
 	flag.StringVar(&Proxy, "proxy", "", "port")
+	flag.BoolVar(&logfile, "log", false, "log file")
 }
 
 func main() {
 	flag.Parse()
 
-	mylog.SetLog(os.Stdout)
+	if len(strings.TrimSpace(Proxy)) == 0 {
+		Proxy = os.Getenv("HTTP_PROXY")
+	}
+	var w io.WriteCloser
+	if logfile {
+		var err error
+		fpath, err := filepath.Abs("./log/")
+		if err != nil {
+			panic(err)
+		}
+		err = os.Mkdir(filepath.Dir(fpath), 0666)
+		if err != nil && !os.IsExist(err) {
+			panic(err)
+		}
+		w, err = os.Create(filepath.Join(fpath, "mylog.log"))
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		w = os.Stdout
+	}
+	mylog.SetLog(w)
 
 	mylog.Println("listening server port ", Port)
 
