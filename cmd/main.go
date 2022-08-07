@@ -41,7 +41,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		err = os.Mkdir(filepath.Dir(fpath), 0666)
+		err = os.MkdirAll(fpath, 0666)
 		if err != nil && !os.IsExist(err) {
 			panic(err)
 		}
