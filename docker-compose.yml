@@ -1,0 +1,17 @@
+version: '3.3'
+services:
+  gosyproxy:
+    container_name: "gosyproxy"
+    image: proxy
+    restart: always
+    ports:
+      - "8082:8888"
+      #environment:
+      #HTTP_PROXY: 192.168.1.57:8088 
+    volumes:
+      - "/E/huangjing/GoWorkSpace/src/github.com/docker/volumes/proxy/:/work/log/"
+    networks:
+      - proxy_net
+
+networks:
+  proxy_net:
