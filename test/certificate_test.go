@@ -7,9 +7,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,14 +41,14 @@ func TestGenCertificate(t *testing.T) {
 			Locality:           []string{"xxxx市"},
 			StreetAddress:      []string{"xxxx街道"},
 			PostalCode:         []string{"邮编"},
-			CommonName:         "topcoder520.github.com", //域名
+			CommonName:         "127.0.0.1", //域名
 		},
 		NotBefore:             time.Now(),                   //有效开始时间
 		NotAfter:              time.Now().AddDate(10, 0, 0), //有效结束时间
 		SubjectKeyId:          []byte{1, 2, 3, 5, 6},
 		BasicConstraintsValid: true,
 		IsCA:                  true, //是否根证书
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 	}
 	//生成rsa格式的私钥和公钥
@@ -60,7 +62,7 @@ func TestGenCertificate(t *testing.T) {
 	//对证书进行pem编码   der编码二进制 pem编码加密后的文本
 	capem := new(bytes.Buffer)
 	pem.Encode(capem, &pem.Block{
-		Type:  "CA CERTIFICATE",
+		Type:  "CERTIFICATE",
 		Bytes: caSelfSigned,
 	})
 	//生成自签根证书文件
@@ -69,7 +71,7 @@ func TestGenCertificate(t *testing.T) {
 	caSelfSignedPrivateKeyDER := x509.MarshalPKCS1PrivateKey(caSelfSignedPrivateKey)
 	cakeypem := new(bytes.Buffer)
 	pem.Encode(cakeypem, &pem.Block{
-		Type:  "CA RSA PRIVATE KEY",
+		Type:  "RSA PRIVATE KEY",
 		Bytes: caSelfSignedPrivateKeyDER,
 	})
 	//生成根证书密钥文件
@@ -87,7 +89,7 @@ func TestGenCertificate(t *testing.T) {
 			Locality:           []string{"xxxx市"},
 			StreetAddress:      []string{"xxxx街道"},
 			PostalCode:         []string{"邮编"},
-			CommonName:         "leaf topcoder520.github.com",
+			CommonName:         "127.0.0.1",
 		},
 		NotBefore:    time.Now(),                   //有效开始时间
 		NotAfter:     time.Now().AddDate(10, 0, 0), //有效结束时间
@@ -104,7 +106,7 @@ func TestGenCertificate(t *testing.T) {
 	}
 	certpem := new(bytes.Buffer)
 	pem.Encode(certpem, &pem.Block{
-		Type:  "CERT CERTIFICATE",
+		Type:  "CERTIFICATE",
 		Bytes: certSigned,
 	})
 	//生成证书文件
@@ -112,7 +114,7 @@ func TestGenCertificate(t *testing.T) {
 	certPrivateKeyDER := x509.MarshalPKCS1PrivateKey(certPrivateKey) // 将私钥转换为 DER 编码格式
 	certkeypem := new(bytes.Buffer)
 	pem.Encode(certkeypem, &pem.Block{
-		Type:  "CERT RSA PRIVATE KEY",
+		Type:  "RSA PRIVATE KEY",
 		Bytes: certPrivateKeyDER,
 	})
 	// 私钥写入文件
@@ -122,4 +124,20 @@ func TestGenCertificate(t *testing.T) {
 	cert_tr, _ := x509.ParseCertificate(certSigned)
 	err = cert_tr.CheckSignatureFrom(ca_tr)
 	log.Println("check signature", err)
+}
+
+func HelloServer(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("This is an example server.\n"))
+	// fmt.Fprintf(w, "This is an example server.\n")
+	// io.WriteString(w, "This is an example server.\n")
+}
+
+func TestHttps(t *testing.T) {
+	fmt.Println("Starting ListenAndServe")
+	http.HandleFunc("/hello", HelloServer)
+	err := http.ListenAndServeTLS(":1443", "./certfiles/cert.pem", "./certfiles/cert.key", nil)
+	if err != nil {
+		log.Fatal("ListenAndServe: ", err)
+	}
 }
