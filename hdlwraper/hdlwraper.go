@@ -2,6 +2,7 @@ package hdlwraper
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -100,6 +101,7 @@ func (hdl *Hdlwraper) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	//dumpRequest(connIn)
 	err = Transport(connIn, connOut)
 	if err != nil {
 		mylog.Println("trans error ", err)
@@ -150,4 +152,27 @@ func connectProxyServer(conn net.Conn, addr string) error {
 		return errors.New(resp.Status)
 	}
 	return nil
+}
+
+func dumpRequest(conn net.Conn) {
+	hdllistener := &Hdllistener{
+		C: conn,
+	}
+	cert, err := tls.LoadX509KeyPair("./certfiles/cert.pem", "././certfiles/cert.key")
+	if err != nil {
+		mylog.Fatal(err)
+	}
+	config := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+	l := tls.NewListener(hdllistener, config)
+	go func() {
+		http.Serve(l, &hdl{})
+	}()
+}
+
+type hdl struct{}
+
+func (h *hdl) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
+	fmt.Println(req.URL.String())
 }

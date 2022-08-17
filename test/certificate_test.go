@@ -33,15 +33,15 @@ func TestGenCertificate(t *testing.T) {
 	ca := &x509.Certificate{
 		SerialNumber: big.NewInt(123456),
 		//证书持有者信息
-		Subject: pkix.Name{
+		Issuer: pkix.Name{
 			Country:            []string{"China"},
-			Organization:       []string{"xxx股份有限公司"},
-			OrganizationalUnit: []string{""},
+			Organization:       []string{"xxx股份有限公司 ca"},
+			OrganizationalUnit: []string{"ca"},
 			Province:           []string{"xxx省"},
 			Locality:           []string{"xxxx市"},
 			StreetAddress:      []string{"xxxx街道"},
 			PostalCode:         []string{"邮编"},
-			CommonName:         "127.0.0.1", //域名
+			CommonName:         "192.168.1.56", //域名
 		},
 		NotBefore:             time.Now(),                   //有效开始时间
 		NotAfter:              time.Now().AddDate(10, 0, 0), //有效结束时间
@@ -90,6 +90,16 @@ func TestGenCertificate(t *testing.T) {
 			StreetAddress:      []string{"xxxx街道"},
 			PostalCode:         []string{"邮编"},
 			CommonName:         "127.0.0.1",
+		},
+		Issuer: pkix.Name{
+			Country:            []string{"China"},
+			Organization:       []string{"xxx股份有限公司 ca"},
+			OrganizationalUnit: []string{"ca"},
+			Province:           []string{"xxx省"},
+			Locality:           []string{"xxxx市"},
+			StreetAddress:      []string{"xxxx街道"},
+			PostalCode:         []string{"邮编"},
+			CommonName:         "192.168.1.56", //域名
 		},
 		NotBefore:    time.Now(),                   //有效开始时间
 		NotAfter:     time.Now().AddDate(10, 0, 0), //有效结束时间

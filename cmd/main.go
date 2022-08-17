@@ -24,13 +24,12 @@ var logfile bool
 
 func init() {
 	flag.IntVar(&Port, "p", 8888, "port")
-	flag.StringVar(&Proxy, "proxy", "", "port")
+	flag.StringVar(&Proxy, "proxy", "", "proxy")
 	flag.BoolVar(&logfile, "log", false, "log file")
+	flag.Parse()
 }
 
 func main() {
-	flag.Parse()
-
 	if len(strings.TrimSpace(Proxy)) == 0 {
 		Proxy = os.Getenv("HTTP_PROXY")
 	}
