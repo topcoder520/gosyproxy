@@ -1,6 +1,7 @@
 package hdlwraper
 
 import (
+	"io"
 	"net"
 )
 
@@ -10,6 +11,9 @@ type Hdllistener struct {
 
 // Accept waits for and returns the next connection to the listener.
 func (l *Hdllistener) Accept() (conn net.Conn, err error) {
+	if l.C == nil {
+		return nil, io.EOF
+	}
 	conn = l.C
 	l.C = nil
 	err = nil
