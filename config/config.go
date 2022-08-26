@@ -3,11 +3,9 @@ package config
 import "crypto/tls"
 
 type Cfg struct {
-	Port    *string
-	Raddr   *string
-	Log     *string
-	Monitor *bool
-	Tls     *bool
+	Port    int
+	Monitor bool
+	Tls     bool
 }
 
 type TlsConfig struct {

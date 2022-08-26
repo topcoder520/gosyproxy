@@ -21,14 +21,19 @@ import (
 	"github.com/topcoder520/gosyproxy/proxy"
 )
 
-var Version = "0.1.0"
+const (
+	Version   = "0.1.0"
+	ONE_DAY   = 24 * time.Hour
+	TWO_WEEKS = ONE_DAY * 14
+	ONE_MONTH = 1
+	ONE_YEAR  = 1
+)
 
 type Hdlwraper struct {
 	Proxy           *proxy.Proxy
 	https           bool
 	MyConfig        *config.Cfg
 	tlsConfig       *config.TlsConfig
-	wrapped         http.Handler
 	pk              *PrivateKey
 	pkPem           []byte
 	issuingCert     *Certificate
@@ -38,12 +43,71 @@ type Hdlwraper struct {
 	certMutex       sync.Mutex
 }
 
-func NewHdlwraper() *Hdlwraper {
-	return &Hdlwraper{}
+func NewHdlwraper(config *config.TlsConfig, cfg *config.Cfg) (*Hdlwraper, error) {
+	hw := &Hdlwraper{dynamicCerts: NewCache(), tlsConfig: config, serverTLSConfig: config.ServerTLSConfig, MyConfig: cfg}
+	err := hw.GenerateCertForClient()
+	if err != nil {
+		return nil, err
+	}
+	return hw, nil
 }
 
 func (hdl *Hdlwraper) SetProxy(proxy *proxy.Proxy) {
 	hdl.Proxy = proxy
+}
+
+func copyTlsConfig(template *tls.Config) *tls.Config {
+	tlsConfig := &tls.Config{}
+	if template != nil {
+		*tlsConfig = *template
+	}
+	return tlsConfig
+}
+
+func copyHTTPRequest(template *http.Request) *http.Request {
+	req := &http.Request{}
+	if template != nil {
+		*req = *template
+	}
+	return req
+}
+
+func respBadGateway(resp http.ResponseWriter, msg string) {
+	log.Println(msg)
+	resp.WriteHeader(502)
+	resp.Write([]byte(msg))
+}
+
+func (hw *Hdlwraper) GenerateCertForClient() (err error) {
+	if hw.tlsConfig.Organization == "" {
+		hw.tlsConfig.Organization = "gosyproxy" + Version
+	}
+	if hw.tlsConfig.CommonName == "" {
+		hw.tlsConfig.CommonName = "gosyproxy"
+	}
+	if hw.pk, err = LoadPKFromFile(hw.tlsConfig.PrivateKeyFile); err != nil {
+		hw.pk, err = GeneratePK(2048)
+		if err != nil {
+			return fmt.Errorf("Unable to generate private key: %s", err)
+		}
+		hw.pk.PemBlockEncodeToFile(hw.tlsConfig.PrivateKeyFile)
+	}
+	hw.pkPem = hw.pk.PemBlockEncodeToBytes()
+	hw.issuingCert, err = LoadCertificateFromFile(hw.tlsConfig.CertFile)
+	if err != nil || hw.issuingCert.ExpiresBefore(time.Now().AddDate(0, ONE_MONTH, 0)) {
+		hw.issuingCert, err = hw.pk.TLSCertificateFor(
+			hw.tlsConfig.Organization,
+			hw.tlsConfig.CommonName,
+			time.Now().AddDate(ONE_YEAR, 0, 0),
+			true,
+			nil)
+		if err != nil {
+			return fmt.Errorf("Unable to generate self-signed issuing certificate: %s", err)
+		}
+		hw.issuingCert.WriteToFile(hw.tlsConfig.CertFile)
+	}
+	hw.issuingCertPem = hw.issuingCert.PEMEncoded()
+	return
 }
 
 func (hw *Hdlwraper) DumpHTTPAndHTTPs(resp http.ResponseWriter, req *http.Request) {
@@ -133,12 +197,45 @@ func (hw *Hdlwraper) DumpHTTPAndHTTPs(resp http.ResponseWriter, req *http.Reques
 		mylog.Println("connIn write error:", err)
 	}
 
-	if *hw.MyConfig.Monitor {
+	if hw.MyConfig.Monitor {
 		<-ch
 		go httpDump(reqDump, respOut)
 	} else {
 		<-ch
 	}
+}
+func (hw *Hdlwraper) FakeCertForName(name string) (cert *tls.Certificate, err error) {
+	kpCandidateIf, found := hw.dynamicCerts.Get(name)
+	if found {
+		return kpCandidateIf.(*tls.Certificate), nil
+	}
+
+	hw.certMutex.Lock()
+	defer hw.certMutex.Unlock()
+	kpCandidateIf, found = hw.dynamicCerts.Get(name)
+	if found {
+		return kpCandidateIf.(*tls.Certificate), nil
+	}
+
+	//create certificate
+	certTTL := TWO_WEEKS
+	generatedCert, err := hw.pk.TLSCertificateFor(
+		hw.tlsConfig.Organization,
+		name,
+		time.Now().Add(certTTL),
+		false,
+		hw.issuingCert)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to issue certificate: %s", err)
+	}
+	keyPair, err := tls.X509KeyPair(generatedCert.PEMEncoded(), hw.pkPem)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to parse keypair for tls: %s", err)
+	}
+
+	cacheTTL := certTTL - ONE_DAY
+	hw.dynamicCerts.Set(name, &keyPair, cacheTTL)
+	return &keyPair, nil
 }
 
 func (hw *Hdlwraper) InterceptHTTPs(resp http.ResponseWriter, req *http.Request) {
@@ -163,7 +260,7 @@ func (hw *Hdlwraper) InterceptHTTPs(resp http.ResponseWriter, req *http.Request)
 	tlsConfig := copyTlsConfig(hw.tlsConfig.ServerTLSConfig)
 	tlsConfig.Certificates = []tls.Certificate{*cert}
 	tlsConnIn := tls.Server(connIn, tlsConfig)
-	listener := &mitmListener{tlsConnIn}
+	listener := &Hdllistener{tlsConnIn}
 	handler := http.HandlerFunc(func(resp2 http.ResponseWriter, req2 *http.Request) {
 		req2.URL.Scheme = "https"
 		req2.URL.Host = req2.Host
@@ -214,17 +311,18 @@ func (hdl *Hdlwraper) handleRequest(req *http.Request) (addr string) {
 }
 
 func (hdl *Hdlwraper) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	if hdl.Proxy != nil {
-		hdl.Forward(resp, req)
-	} else {
-		if req.Method == "CONNECT" {
-			hdl.https = true
-			hdl.InterceptHTTPs(resp, req)
-		} else {
-			hdl.https = false
-			hdl.DumpHTTPAndHTTPs(resp, req)
-		}
-	}
+	hdl.Forward(resp, req)
+	// if hdl.Proxy != nil {
+	// 	hdl.Forward(resp, req)
+	// } else {
+	// 	if req.Method == "CONNECT" {
+	// 		hdl.https = true
+	// 		hdl.InterceptHTTPs(resp, req)
+	// 	} else {
+	// 		hdl.https = false
+	// 		hdl.DumpHTTPAndHTTPs(resp, req)
+	// 	}
+	// }
 }
 
 func (hdl *Hdlwraper) Forward(resp http.ResponseWriter, req *http.Request) {
@@ -266,7 +364,6 @@ func (hdl *Hdlwraper) Forward(resp http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	//dumpRequest(connIn)
 	err = Transport(connIn, connOut)
 	if err != nil {
 		mylog.Println("trans error ", err)
@@ -317,27 +414,4 @@ func connectProxyServer(conn net.Conn, addr string) error {
 		return errors.New(resp.Status)
 	}
 	return nil
-}
-
-func dumpRequest(conn net.Conn) {
-	hdllistener := &Hdllistener{
-		C: conn,
-	}
-	cert, err := tls.LoadX509KeyPair("./certfiles/cert.pem", "././certfiles/cert.key")
-	if err != nil {
-		mylog.Fatal(err)
-	}
-	config := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-	l := tls.NewListener(hdllistener, config)
-	go func() {
-		http.Serve(l, &hdl{})
-	}()
-}
-
-type hdl struct{}
-
-func (h *hdl) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	fmt.Println(req.URL.String())
 }
