@@ -73,7 +73,7 @@ func (pxy *Proxy) getEnvAny(names ...string) string {
 	return ""
 }
 
-func (pxy *Proxy) handleRequest(req *http.Request) (addr string) {
+func (pxy *Proxy) getRemoteAddress(req *http.Request) (addr string) {
 	if len(strings.TrimSpace(pxy.HTTP_PROXY)) > 0 {
 		addr = pxy.HTTP_PROXY
 		if req.Method == "CONNECT" {
@@ -113,7 +113,7 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer connIn.Close()
-	addr := pxy.handleRequest(req)
+	addr := pxy.getRemoteAddress(req)
 
 	mylog.Println("remote address=> ", addr, fmt.Sprintf(" url=> %s %s", req.Method, req.URL.String()))
 	connOut, err := net.Dial("tcp", addr)
