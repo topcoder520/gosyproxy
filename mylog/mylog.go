@@ -3,6 +3,8 @@ package mylog
 import (
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 )
 
 var logger *log.Logger
@@ -11,9 +13,25 @@ func init() {
 	log.SetFlags(log.LstdFlags)
 }
 
+func SetLogFile(logpath string, logname string) {
+	var err error
+	fpath, err := filepath.Abs(logpath)
+	if err != nil {
+		panic(err)
+	}
+	err = os.MkdirAll(fpath, 0666)
+	if err != nil && !os.IsExist(err) {
+		panic(err)
+	}
+	w, err := os.Create(filepath.Join(fpath, logname))
+	if err != nil {
+		panic(err)
+	}
+	SetLog(w)
+}
+
 func SetLog(w io.WriteCloser) {
 	logger = log.New(w, "[gosyproxy] ", log.LstdFlags)
-	log.Println()
 }
 
 // These functions write to the standard logger.
