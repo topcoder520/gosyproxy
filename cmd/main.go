@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/topcoder520/gosyproxy/config"
 	"github.com/topcoder520/gosyproxy/hdlwraper"
 	"github.com/topcoder520/gosyproxy/mylog"
 	"github.com/topcoder520/gosyproxy/proxy"
@@ -55,14 +54,7 @@ func main() {
 	mylog.SetLog(w)
 
 	mylog.Println("listening server port ", Port)
-
-	tlsConfig := config.NewTlsConfig("gosyproxy-ca-pk.pem", "gosyproxy-ca-cert.pem", "", "")
-	cfg := &config.Cfg{
-		Port:    Port,
-		Monitor: false,
-		Tls:     false,
-	}
-	handler, err := hdlwraper.NewHdlwraper(tlsConfig, cfg)
+	handler, err := hdlwraper.NewHdlwraper()
 	if err != nil {
 		mylog.Fatalln(err)
 	}
@@ -88,16 +80,8 @@ func main() {
 		ReadTimeout:  time.Minute * 10,
 		WriteTimeout: time.Minute * 10,
 	}
-	if cfg.Tls {
-		mylog.Println("Listen And Serve HTTP TLS")
-		if err := server.ListenAndServeTLS("gosyproxy-ca-cert.pem", "gosyproxy-ca-pk.pem"); err != nil {
-			mylog.Fatalln(err)
-		}
-	} else {
-		mylog.Println("Listen And Serve HTTP")
-		if err := server.ListenAndServe(); err != nil {
-			mylog.Fatalln(err)
-		}
+	mylog.Println("Listen And Serve HTTP")
+	if err := server.ListenAndServe(); err != nil {
+		mylog.Fatalln(err)
 	}
-
 }
