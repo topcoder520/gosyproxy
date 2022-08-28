@@ -10,29 +10,27 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/topcoder520/gosyproxy/auth"
+	"github.com/topcoder520/gosyproxy/config"
 	"github.com/topcoder520/gosyproxy/mylog"
-)
-
-const (
-	PROXY_NAME = "gosyproxy"
-	Version    = "0.1.0"
 )
 
 type Proxy struct {
 	Version    string
 	HTTP_PROXY string
-	Cfg        *Cfg
+	Cfg        *config.Cfg
 }
 
-func NewHttpProxy(cfg *Cfg) (*Proxy, error) {
+func NewHttpProxy(cfg *config.Cfg) (*Proxy, error) {
 	if cfg == nil {
-		return nil, ErrorMustConfig
+		return nil, config.ErrorMustConfig
 	}
 	proxy := &Proxy{
-		Version:    Version,
+		Version:    auth.Version,
 		HTTP_PROXY: strings.TrimSpace(cfg.Proxy),
 		Cfg:        cfg,
 	}
@@ -123,7 +121,11 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 
 		//验证请求
 		if pxy.Cfg.Auth {
-
+			err = auth.AuthRequest(req, connIn, pxy.Cfg)
+			if err != nil {
+				resp.Write([]byte("Proxy Authorization fail"))
+				return
+			}
 		}
 
 		addr := pxy.getRemoteAddress(req)
@@ -144,7 +146,7 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 		}
 
 		b := []byte("HTTP/1.1 200 Connection Established\r\n" +
-			"Proxy-Agent: " + fmt.Sprintf("%s/%s", PROXY_NAME, Version) + "\r\n" +
+			"Proxy-Agent: " + fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version) + "\r\n" +
 			"Content-Length: 0" + "\r\n\r\n")
 		_, err = connIn.Write(b)
 		if err != nil {
@@ -156,7 +158,7 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 			mylog.Println("trans error ", err)
 		}
 	} else {
-		resp.Header().Add("Proxy-Agent", fmt.Sprintf("%s/%s", PROXY_NAME, Version))
+		resp.Header().Add(auth.ProxyAgent, fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version))
 		fmt.Fprintf(resp, "Incorrect Request！")
 		return
 	}
@@ -193,7 +195,8 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 		Header:     make(http.Header),
 	}
 	req.Header.Set("Proxy-Connection", "keep-alive")
-	req.Header.Add("Proxy-Agent", fmt.Sprintf("%s/%s", PROXY_NAME, Version))
+	req.Header.Add(auth.ProxyAuthorization, "") //todo
+	req.Header.Add(auth.ProxyAgent, fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version))
 
 	if err := req.Write(conn); err != nil {
 		return err
@@ -203,12 +206,61 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return errors.New(resp.Status)
-	}
-	agent := resp.Header.Get("Proxy-Agent")
-	if strings.HasPrefix(agent, PROXY_NAME) {
+	agent := resp.Header.Get(auth.ProxyAgent)
+	if strings.HasPrefix(agent, auth.PROXY_NAME) {
+		pxyAuth := resp.Header.Get(auth.ProxyAuthenticate)
+		if len(pxyAuth) > 0 {
+			//md5,sha1,mix/rand
+			strArr := strings.Split(pxyAuth, "/")
+			if len(strArr) != 2 {
+				return errors.New(fmt.Sprintf("Read request %s error:%s", auth.ProxyAuthenticate, err))
+			}
+			algorithms := strings.Split(strArr[0], ",")
+			if len(algorithms) == 0 {
+				return errors.New(fmt.Sprintf("Read request %s error:%s", auth.ProxyAuthenticate, err))
+			}
+			var reauth string
+			srandNumber, _ := strconv.ParseInt(algorithms[1], 10, 32)
+			algorithm := algorithms[0] //todo
+			if algorithm == "md5" {
+				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(srandNumber))
+			} else if algorithm == "sha1" {
+				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(srandNumber))
+			} else {
+				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(srandNumber))
+			}
+			//md5 md5str rand
+			sandNumber := auth.Rand()
+			req.Header.Set(auth.ProxyAuthorization, fmt.Sprintf("%s %s %d", algorithm, reauth, sandNumber))
+			if err := req.Write(conn); err != nil {
+				return err
+			}
 
+			//very server
+			resp, err = http.ReadResponse(bufio.NewReader(conn), req)
+			if err != nil {
+				return err
+			}
+			pxyAuthInfo := resp.Header.Get(auth.ProxyAuthenticationInfo)
+			if len(pxyAuthInfo) == 0 {
+				return fmt.Errorf("read request %s error:%s", auth.ProxyAuthenticationInfo, err)
+			}
+			reauth = ""
+			if algorithm == "md5" {
+				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(sandNumber))
+			} else if algorithm == "sha1" {
+				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(sandNumber))
+			} else {
+				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(sandNumber))
+			}
+			if reauth != pxyAuthInfo {
+				return fmt.Errorf("proxy server verification failed")
+			}
+		}
+	} else {
+		if resp.StatusCode != http.StatusOK {
+			return errors.New(resp.Status)
+		}
 	}
 	return nil
 }
