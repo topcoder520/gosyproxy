@@ -17,36 +17,42 @@ import (
 )
 
 const (
-	Version = "0.1.0"
+	PROXY_NAME = "gosyproxy"
+	Version    = "0.1.0"
 )
 
 type Proxy struct {
 	Version    string
 	HTTP_PROXY string
+	Cfg        *Cfg
 }
 
-func NewHttpProxy(proxyAddr string) *Proxy {
+func NewHttpProxy(cfg *Cfg) (*Proxy, error) {
+	if cfg == nil {
+		return nil, ErrorMustConfig
+	}
 	proxy := &Proxy{
 		Version:    Version,
-		HTTP_PROXY: strings.TrimSpace(proxyAddr),
+		HTTP_PROXY: strings.TrimSpace(cfg.Proxy),
+		Cfg:        cfg,
 	}
 	if len(proxy.HTTP_PROXY) == 0 {
 		proxy.HTTP_PROXY = proxy.getEnvAny("HTTP_PROXY", "http_proxy")
 	}
-	return proxy
+	return proxy, nil
 }
 
-func (pxy *Proxy) Run(port int) {
+func (pxy *Proxy) Run() {
 	errchan := make(chan int, 1)
 	sigchan := make(chan os.Signal, 1)
 	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", port),
+		Addr:         fmt.Sprintf(":%d", pxy.Cfg.Port),
 		Handler:      pxy,
 		ReadTimeout:  time.Minute * 10,
 		WriteTimeout: time.Minute * 10,
 	}
 	go func() {
-		mylog.Println("gosyproxy starting! listen port:", port)
+		mylog.Println("gosyproxy starting! listen port:", pxy.Cfg.Port)
 		if len(pxy.HTTP_PROXY) > 0 {
 			mylog.Println("HTTP_PROXY ", pxy.HTTP_PROXY)
 		}
@@ -107,21 +113,27 @@ func (pxy *Proxy) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 }
 
 func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
-	connIn, _, err := resp.(http.Hijacker).Hijack()
-	if err != nil {
-		mylog.Println("Hijack=>", err)
-		return
-	}
-	defer connIn.Close()
-	addr := pxy.getRemoteAddress(req)
-
-	mylog.Println("remote address=> ", addr, fmt.Sprintf(" url=> %s %s", req.Method, req.URL.String()))
-	connOut, err := net.Dial("tcp", addr)
-	if err != nil {
-		mylog.Println("Dial out=>", err)
-		return
-	}
 	if req.Method == "CONNECT" {
+		connIn, _, err := resp.(http.Hijacker).Hijack()
+		if err != nil {
+			mylog.Println("Hijack=>", err)
+			return
+		}
+		defer connIn.Close()
+
+		//验证请求
+		if pxy.Cfg.Auth {
+
+		}
+
+		addr := pxy.getRemoteAddress(req)
+
+		mylog.Println("remote address=> ", addr, fmt.Sprintf(" url=> %s %s", req.Method, req.URL.String()))
+		connOut, err := net.Dial("tcp", addr)
+		if err != nil {
+			mylog.Println("Dial out=>", err)
+			return
+		}
 		if len(strings.TrimSpace(pxy.HTTP_PROXY)) > 0 {
 			//让代理连接 req.Host服务器
 			err := pxy.connectProxyServer(connOut, req.Host)
@@ -132,22 +144,21 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 		}
 
 		b := []byte("HTTP/1.1 200 Connection Established\r\n" +
-			"Proxy-Agent: gosyproxy/" + Version + "\r\n" +
+			"Proxy-Agent: " + fmt.Sprintf("%s/%s", PROXY_NAME, Version) + "\r\n" +
 			"Content-Length: 0" + "\r\n\r\n")
 		_, err = connIn.Write(b)
 		if err != nil {
 			mylog.Println("Write Connect err:", err)
 			return
 		}
-	} else {
-		if err = req.Write(connOut); err != nil {
-			mylog.Println("send to server err", err)
-			return
+		err = pxy.transport(connIn, connOut)
+		if err != nil {
+			mylog.Println("trans error ", err)
 		}
-	}
-	err = pxy.transport(connIn, connOut)
-	if err != nil {
-		mylog.Println("trans error ", err)
+	} else {
+		resp.Header().Add("Proxy-Agent", fmt.Sprintf("%s/%s", PROXY_NAME, Version))
+		fmt.Fprintf(resp, "Incorrect Request！")
+		return
 	}
 }
 
@@ -182,6 +193,7 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 		Header:     make(http.Header),
 	}
 	req.Header.Set("Proxy-Connection", "keep-alive")
+	req.Header.Add("Proxy-Agent", fmt.Sprintf("%s/%s", PROXY_NAME, Version))
 
 	if err := req.Write(conn); err != nil {
 		return err
@@ -193,6 +205,10 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		return errors.New(resp.Status)
+	}
+	agent := resp.Header.Get("Proxy-Agent")
+	if strings.HasPrefix(agent, PROXY_NAME) {
+
 	}
 	return nil
 }
