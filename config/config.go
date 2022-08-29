@@ -25,6 +25,7 @@ type Cfg struct {
 	Proxy       string
 	PxyUserName string
 	PxyPwd      string
+	PxyUrl      *url.URL
 
 	Logfile bool
 	Help    bool
@@ -57,7 +58,6 @@ func (cfg *Cfg) ParseCmd() error {
 			return fmt.Errorf("listening port is unavailable,err:%s", err)
 		}
 		cfg.Port = fmt.Sprintf(":%s", u.Port())
-		fmt.Println(u.User.Password())
 		if u.User != nil {
 			cfg.Auth = true
 			cfg.UserName = u.User.Username()
@@ -78,6 +78,7 @@ func (cfg *Cfg) ParseCmd() error {
 			cfg.PxyUserName = up.User.Username()
 			cfg.PxyPwd, _ = up.User.Password()
 		}
+		cfg.PxyUrl = up
 	}
 
 	if cfg.Help {

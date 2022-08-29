@@ -79,7 +79,7 @@ func (pxy *Proxy) getEnvAny(names ...string) string {
 
 func (pxy *Proxy) getRemoteAddress(req *http.Request) (addr string) {
 	if len(strings.TrimSpace(pxy.HTTP_PROXY)) > 0 {
-		addr = pxy.HTTP_PROXY
+		addr = pxy.Cfg.PxyUrl.Host
 		if req.Method == "CONNECT" {
 
 		} else {
@@ -87,7 +87,7 @@ func (pxy *Proxy) getRemoteAddress(req *http.Request) (addr string) {
 			req.Header.Del("Connection")
 			req.Header.Set("Proxy-Connection", "Keep-Alive")
 			//设置代理服务器的时候Path要改为携带http的完整路径
-			req.URL.Path = req.URL.String()
+			//req.URL.Path = req.URL.String()
 		}
 	} else {
 		addr = req.Host
@@ -111,40 +111,45 @@ func (pxy *Proxy) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 }
 
 func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
-	if req.Method == "CONNECT" {
-		connIn, _, err := resp.(http.Hijacker).Hijack()
+	connIn, _, err := resp.(http.Hijacker).Hijack()
+	if err != nil {
+		mylog.Println("Hijack=>", err)
+		return
+	}
+	defer connIn.Close()
+	//验证请求
+	if pxy.Cfg.Auth {
+		fmt.Println("验证请求")
+		err = auth.AuthRequest(req, connIn, pxy.Cfg)
 		if err != nil {
-			mylog.Println("Hijack=>", err)
+			mylog.Println("Proxy Authorization fail,err:", err)
+			connIn.Write([]byte("Proxy Authorization fail"))
 			return
 		}
-		defer connIn.Close()
+		fmt.Println("验证请求结束")
+	}
+	addr := pxy.getRemoteAddress(req)
 
-		//验证请求
-		if pxy.Cfg.Auth {
-			err = auth.AuthRequest(req, connIn, pxy.Cfg)
-			if err != nil {
-				resp.Write([]byte("Proxy Authorization fail"))
-				return
-			}
-		}
-
-		addr := pxy.getRemoteAddress(req)
-
-		mylog.Println("remote address=> ", addr, fmt.Sprintf(" url=> %s %s", req.Method, req.URL.String()))
-		connOut, err := net.Dial("tcp", addr)
+	mylog.Println("remote address=> ", addr, fmt.Sprintf(" url=> %s %s", req.Method, req.URL.String()))
+	connOut, err := net.Dial("tcp", addr)
+	if err != nil {
+		mylog.Println("Dial out=>", err)
+		return
+	}
+	if len(strings.TrimSpace(pxy.HTTP_PROXY)) > 0 {
+		//让代理连接 req.Host服务器
+		fmt.Println("代理服务器")
+		err := pxy.connectProxyServer(connOut, req.Host)
 		if err != nil {
-			mylog.Println("Dial out=>", err)
+			mylog.Println("connectProxyServer=>", err)
 			return
 		}
-		if len(strings.TrimSpace(pxy.HTTP_PROXY)) > 0 {
-			//让代理连接 req.Host服务器
-			err := pxy.connectProxyServer(connOut, req.Host)
-			if err != nil {
-				mylog.Println("connectProxyServer=>", err)
-				return
-			}
-		}
+	}
+	req.Header.Del(auth.ProxyAuthorization)
+	req.Header.Del(auth.ProxyAgent)
 
+	if req.Method == "CONNECT" && !pxy.Cfg.Auth {
+		fmt.Println("CONNECT返回")
 		b := []byte("HTTP/1.1 200 Connection Established\r\n" +
 			"Proxy-Agent: " + fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version) + "\r\n" +
 			"Content-Length: 0" + "\r\n\r\n")
@@ -153,14 +158,18 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 			mylog.Println("Write Connect err:", err)
 			return
 		}
-		err = pxy.transport(connIn, connOut)
-		if err != nil {
-			mylog.Println("trans error ", err)
-		}
 	} else {
-		resp.Header().Add(auth.ProxyAgent, fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version))
-		fmt.Fprintf(resp, "Incorrect Request！")
-		return
+		req.Header.Del("Proxy-Connection")
+		req.Header.Set("Connection", "Keep-Alive")
+		if err = req.Write(connOut); err != nil {
+			mylog.Println("send to server err", err)
+			return
+		}
+	}
+	fmt.Println("transport")
+	err = pxy.transport(connIn, connOut)
+	if err != nil {
+		mylog.Println("trans error ", err)
 	}
 }
 
@@ -208,6 +217,7 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 	}
 	agent := resp.Header.Get(auth.ProxyAgent)
 	if strings.HasPrefix(agent, auth.PROXY_NAME) {
+		fmt.Println("auth out")
 		pxyAuth := resp.Header.Get(auth.ProxyAuthenticate)
 		if len(pxyAuth) > 0 {
 			//md5,sha1,mix/rand
@@ -220,14 +230,16 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 				return errors.New(fmt.Sprintf("Read request %s error:%s", auth.ProxyAuthenticate, err))
 			}
 			var reauth string
-			srandNumber, _ := strconv.ParseInt(algorithms[1], 10, 32)
+			srandNumber := strArr[1]
 			algorithm := algorithms[0] //todo
 			if algorithm == "md5" {
-				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(srandNumber))
+				fmt.Println("algorithm == md5")
+				fmt.Println(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
+				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
 			} else if algorithm == "sha1" {
-				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(srandNumber))
+				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
 			} else {
-				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(srandNumber))
+				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
 			}
 			//md5 md5str rand
 			sandNumber := auth.Rand()
@@ -247,17 +259,18 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 			}
 			reauth = ""
 			if algorithm == "md5" {
-				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(sandNumber))
+				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
 			} else if algorithm == "sha1" {
-				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(sandNumber))
+				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
 			} else {
-				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), int(sandNumber))
+				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
 			}
 			if reauth != pxyAuthInfo {
 				return fmt.Errorf("proxy server verification failed")
 			}
 		}
 	} else {
+		fmt.Println("normal out")
 		if resp.StatusCode != http.StatusOK {
 			return errors.New(resp.Status)
 		}
