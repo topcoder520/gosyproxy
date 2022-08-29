@@ -44,13 +44,13 @@ func (pxy *Proxy) Run() {
 	errchan := make(chan int, 1)
 	sigchan := make(chan os.Signal, 1)
 	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", pxy.Cfg.Port),
+		Addr:         pxy.Cfg.Port,
 		Handler:      pxy,
 		ReadTimeout:  time.Minute * 10,
 		WriteTimeout: time.Minute * 10,
 	}
 	go func() {
-		mylog.Println("gosyproxy starting! listen port:", pxy.Cfg.Port)
+		mylog.Println("gosyproxy starting! listen port ", pxy.Cfg.Port)
 		if len(pxy.HTTP_PROXY) > 0 {
 			mylog.Println("HTTP_PROXY ", pxy.HTTP_PROXY)
 		}

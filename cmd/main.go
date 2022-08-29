@@ -10,6 +10,7 @@ func main() {
 	cfg := new(config.Cfg)
 	err := cfg.ParseCmd()
 	if err != nil {
+		mylog.Fatalln(err)
 		return
 	}
 	pxy, err := proxy.NewHttpProxy(cfg)
