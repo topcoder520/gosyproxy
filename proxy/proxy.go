@@ -35,7 +35,7 @@ func NewHttpProxy(cfg *config.Cfg) (*Proxy, error) {
 		Cfg:        cfg,
 	}
 	if len(proxy.HTTP_PROXY) == 0 {
-		proxy.HTTP_PROXY = proxy.getEnvAny("HTTP_PROXY", "http_proxy")
+		proxy.HTTP_PROXY = proxy.getEnvAny("HTTP_PROXY", "http_proxy") //todo 解析
 	}
 	return proxy, nil
 }
