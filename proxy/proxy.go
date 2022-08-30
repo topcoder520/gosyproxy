@@ -119,14 +119,12 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 	defer connIn.Close()
 	//验证请求
 	if pxy.Cfg.Auth {
-		fmt.Println("验证请求")
 		err = auth.AuthRequest(req, connIn, pxy.Cfg)
 		if err != nil {
 			mylog.Println("Proxy Authorization fail,err:", err)
-			connIn.Write([]byte("Proxy Authorization fail"))
+			connIn.Write([]byte("Proxy Authorization fail")) //todo
 			return
 		}
-		fmt.Println("验证请求结束")
 	}
 	addr := pxy.getRemoteAddress(req)
 
@@ -137,8 +135,6 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if len(strings.TrimSpace(pxy.HTTP_PROXY)) > 0 {
-		//让代理连接 req.Host服务器
-		fmt.Println("代理服务器")
 		err := pxy.connectProxyServer(connOut, req.Host)
 		if err != nil {
 			mylog.Println("connectProxyServer=>", err)
@@ -148,8 +144,7 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 	req.Header.Del(auth.ProxyAuthorization)
 	req.Header.Del(auth.ProxyAgent)
 
-	if req.Method == "CONNECT" && !pxy.Cfg.Auth {
-		fmt.Println("CONNECT返回")
+	if req.Method == "CONNECT" {
 		b := []byte("HTTP/1.1 200 Connection Established\r\n" +
 			"Proxy-Agent: " + fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version) + "\r\n" +
 			"Content-Length: 0" + "\r\n\r\n")
@@ -166,7 +161,6 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	fmt.Println("transport")
 	err = pxy.transport(connIn, connOut)
 	if err != nil {
 		mylog.Println("trans error ", err)
@@ -217,7 +211,6 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 	}
 	agent := resp.Header.Get(auth.ProxyAgent)
 	if strings.HasPrefix(agent, auth.PROXY_NAME) {
-		fmt.Println("auth out")
 		pxyAuth := resp.Header.Get(auth.ProxyAuthenticate)
 		if len(pxyAuth) > 0 {
 			//md5,sha1,mix/rand
@@ -233,8 +226,6 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 			srandNumber := strArr[1]
 			algorithm := algorithms[0] //todo
 			if algorithm == "md5" {
-				fmt.Println("algorithm == md5")
-				fmt.Println(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
 				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
 			} else if algorithm == "sha1" {
 				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
@@ -268,12 +259,16 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 			if reauth != pxyAuthInfo {
 				return fmt.Errorf("proxy server verification failed")
 			}
+
+			//等待代理返回隧道是否连接成功
+			resp, err = http.ReadResponse(bufio.NewReader(conn), req)
+			if err != nil {
+				return err
+			}
 		}
-	} else {
-		fmt.Println("normal out")
-		if resp.StatusCode != http.StatusOK {
-			return errors.New(resp.Status)
-		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return errors.New(resp.Status)
 	}
 	return nil
 }

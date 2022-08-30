@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/topcoder520/gosyproxy/config"
-	"github.com/topcoder520/gosyproxy/mylog"
 )
 
 const (
@@ -86,14 +85,12 @@ func AuthRequest(req *http.Request, conn net.Conn, cfg *config.Cfg) error {
 		}
 		_, err = conn.Write(respByts)
 		if err != nil {
-			mylog.Println("Write response %s error:%s", ProxyAuthenticate, err)
-			return err
+			return fmt.Errorf("Write response %s error:%s", ProxyAuthenticate, err)
 		}
 		b := bufio.NewReader(conn)
 		req2, err := http.ReadRequest(b)
 		if err != nil {
-			mylog.Println("Read request %s error:%s", ProxyAuthorization, err)
-			return err
+			return fmt.Errorf("Read request %s error:%s", ProxyAuthorization, err)
 		}
 		authHeader = req2.Header.Get(ProxyAuthorization)
 		if len(authHeader) == 0 {
@@ -101,34 +98,27 @@ func AuthRequest(req *http.Request, conn net.Conn, cfg *config.Cfg) error {
 		}
 	}
 	//md5 md5str rand
-	fmt.Println("authHeader=> ", authHeader)
 	strAuth := strings.Split(authHeader, " ")
 	if len(strAuth) != 3 {
-		mylog.Println("strAuth")
 		return ErrorProxyAuthorizationError
 	}
 	var respauth string
 	crandNumber := strAuth[2]
 	if strAuth[0] == "md5" {
 		s := MD5(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
-		fmt.Println(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
-		fmt.Println(s, strAuth[1])
 		if s != strAuth[1] {
-			mylog.Println("s != strAuth md5")
 			return ErrorProxyAuthorizationError
 		}
 		respauth = MD5(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
 	} else if strAuth[0] == "sha1" {
 		s := Sha1(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
 		if s != strAuth[1] {
-			mylog.Println("s != strAuth sha1")
 			return ErrorProxyAuthorizationError
 		}
 		respauth = Sha1(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
 	} else {
 		s := Mix(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
 		if s != strAuth[1] {
-			mylog.Println("s != strAuth Mix")
 			return ErrorProxyAuthorizationError
 		}
 		respauth = Mix(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
