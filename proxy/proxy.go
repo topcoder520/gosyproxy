@@ -224,17 +224,12 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 			}
 			var reauth string
 			srandNumber := strArr[1]
-			algorithm := algorithms[0] //todo
-			if algorithm == "md5" {
-				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
-			} else if algorithm == "sha1" {
-				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
-			} else {
-				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
-			}
+			algorithm := algorithms[0] //todo 随机选算法
+			enc := auth.NewEncryption(algorithm)
+			reauth = enc.Encrypt(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
 			//md5 md5str rand
 			sandNumber := auth.Rand()
-			req.Header.Set(auth.ProxyAuthorization, fmt.Sprintf("%s %s %d", algorithm, reauth, sandNumber))
+			req.Header.Set(auth.ProxyAuthorization, fmt.Sprintf("%s %s %s", algorithm, reauth, strconv.Itoa(sandNumber)))
 			if err := req.Write(conn); err != nil {
 				return err
 			}
@@ -248,14 +243,7 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 			if len(pxyAuthInfo) == 0 {
 				return fmt.Errorf("read request %s error:%s", auth.ProxyAuthenticationInfo, err)
 			}
-			reauth = ""
-			if algorithm == "md5" {
-				reauth = auth.MD5(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
-			} else if algorithm == "sha1" {
-				reauth = auth.Sha1(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
-			} else {
-				reauth = auth.Mix(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
-			}
+			reauth = enc.Encrypt(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
 			if reauth != pxyAuthInfo {
 				return fmt.Errorf("proxy server verification failed")
 			}

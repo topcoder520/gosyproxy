@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/big"
+	mrand "math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -150,4 +151,14 @@ func TestHttps(t *testing.T) {
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
+}
+
+var s = mrand.NewSource(10000)
+var r = mrand.New(s)
+
+func TestRand(t *testing.T) {
+	fmt.Println(r.Int())
+	fmt.Println(r.Int())
+	fmt.Println(r.Int())
+	fmt.Println(r.Int())
 }

@@ -34,39 +34,53 @@ const (
 var ErrorProxyAuthorization = errors.New("Proxy-Authorization not found")
 var ErrorProxyAuthorizationError = errors.New("Proxy-Authorization incorrect")
 
+var s = rand.NewSource(RandSource)
+var r = rand.New(s)
+
 func Rand() int {
-	s := rand.NewSource(RandSource)
-	r := rand.New(s)
 	return r.Int()
 }
 
-//TODO 把加密算法封装 函数类型
-
-func MD5(s string, rand string) string {
-	h := md5.New()
-	io.WriteString(h, rand)
-	io.WriteString(h, s)
-	io.WriteString(h, AuthKey)
-	return fmt.Sprintf("%x", h.Sum(nil))
+type Encryption interface {
+	Encrypt(string, string) string
 }
 
-func Sha1(s string, rand string) string {
-	h := sha1.New()
-	io.WriteString(h, rand)
-	io.WriteString(h, s)
-	io.WriteString(h, AuthKey)
-	return fmt.Sprintf("%x", h.Sum(nil))
+type EncryptFunc func(string, string) string
+
+func (enfc EncryptFunc) Encrypt(s string, rand string) string {
+	return enfc(s, rand)
 }
 
-func Mix(s string, rand string) string {
-	h := md5.New()
-	io.WriteString(h, rand)
-	io.WriteString(h, s)
-	io.WriteString(h, AuthKey)
-	s0 := fmt.Sprintf("%x", h.Sum(nil))
-	s1 := sha1.New()
-	io.WriteString(s1, s0)
-	return fmt.Sprintf("%x", s1.Sum(nil))
+func NewEncryption(enc string) Encryption {
+	switch strings.ToLower(enc) {
+	case "md5":
+		return EncryptFunc(func(s string, rand string) string {
+			h := md5.New()
+			io.WriteString(h, rand)
+			io.WriteString(h, s)
+			io.WriteString(h, AuthKey)
+			return fmt.Sprintf("%x", h.Sum(nil))
+		})
+	case "sha1":
+		return EncryptFunc(func(s string, rand string) string {
+			h := sha1.New()
+			io.WriteString(h, rand)
+			io.WriteString(h, s)
+			io.WriteString(h, AuthKey)
+			return fmt.Sprintf("%x", h.Sum(nil))
+		})
+	default:
+		return EncryptFunc(func(s string, rand string) string {
+			h := md5.New()
+			io.WriteString(h, rand)
+			io.WriteString(h, s)
+			io.WriteString(h, AuthKey)
+			s0 := fmt.Sprintf("%x", h.Sum(nil))
+			s1 := sha1.New()
+			io.WriteString(s1, s0)
+			return fmt.Sprintf("%x", s1.Sum(nil))
+		})
+	}
 }
 
 func AuthRequest(req *http.Request, conn net.Conn, cfg *config.Cfg) error {
@@ -104,25 +118,12 @@ func AuthRequest(req *http.Request, conn net.Conn, cfg *config.Cfg) error {
 	}
 	var respauth string
 	crandNumber := strAuth[2]
-	if strAuth[0] == "md5" {
-		s := MD5(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
-		if s != strAuth[1] {
-			return ErrorProxyAuthorizationError
-		}
-		respauth = MD5(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
-	} else if strAuth[0] == "sha1" {
-		s := Sha1(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
-		if s != strAuth[1] {
-			return ErrorProxyAuthorizationError
-		}
-		respauth = Sha1(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
-	} else {
-		s := Mix(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
-		if s != strAuth[1] {
-			return ErrorProxyAuthorizationError
-		}
-		respauth = Mix(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
+	enc := NewEncryption(strAuth[0])
+	s := enc.Encrypt(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
+	if s != strAuth[1] {
+		return ErrorProxyAuthorizationError
 	}
+	respauth = enc.Encrypt(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
 	resp.Header.Del(ProxyAuthenticate)
 	resp.Header.Add(ProxyAuthenticationInfo, respauth)
 	respByts, err := httputil.DumpResponse(resp, false)
