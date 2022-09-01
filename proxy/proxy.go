@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -240,7 +241,9 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 			}
 			var reauth string
 			srandNumber := strArr[1]
-			algorithm := algorithms[0] //todo 随机选算法
+			rand.Seed(time.Now().Unix())
+			n := rand.Intn(len(algorithms))
+			algorithm := algorithms[n] //随机选算法
 			enc := auth.NewEncryption(algorithm)
 			reauth = enc.Encrypt(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
 			//md5 md5str rand
