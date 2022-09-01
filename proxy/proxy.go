@@ -11,12 +11,14 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/topcoder520/gosyproxy/auth"
 	"github.com/topcoder520/gosyproxy/config"
 	"github.com/topcoder520/gosyproxy/mylog"
+	"github.com/topcoder520/gosyproxy/test"
 )
 
 type Proxy struct {
@@ -35,7 +37,7 @@ func NewHttpProxy(cfg *config.Cfg) (*Proxy, error) {
 		Cfg:        cfg,
 	}
 	if len(proxy.HTTP_PROXY) == 0 {
-		p := proxy.getEnvAny("HTTP_PROXY", "http_proxy")
+		p := proxy.getEnvAny("GOSY_PROXY", "gosy_proxy")
 		if len(p) > 0 {
 			up, err := url.Parse(p)
 			if err != nil {
@@ -211,6 +213,7 @@ func (pxy *Proxy) transport(conn1, conn2 net.Conn) (err error) {
 }
 
 func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
+	sandNumber := strconv.Itoa(auth.Rand())
 	req := &http.Request{
 		Method:     "CONNECT",
 		URL:        &url.URL{Host: addr},
@@ -220,13 +223,16 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 		Header:     make(http.Header),
 	}
 	req.Header.Set("Proxy-Connection", "keep-alive")
-
-	select {
-	case token := <-auth.AuthPool.Pop():
-
+	//预授权-------------------start-------消费
+	token := auth.AuthPool.Pop()
+	if token != nil {
+		req.Header.Add(auth.ProxyAuthorization, fmt.Sprintf("%s %s", token.Token, sandNumber))
+	} else {
+		req.Header.Add(auth.ProxyAuthorization, "")
 	}
-
-	req.Header.Add(auth.ProxyAuthorization, "") //todo
+	fmt.Println("=======预授权=========")
+	test.DumpRequest(req)
+	//预授权-------------------end
 	req.Header.Add(auth.ProxyAgent, fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version))
 
 	if err := req.Write(conn); err != nil {
@@ -237,7 +243,7 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 	if err != nil {
 		return fmt.Errorf("read response err:%s", err)
 	}
-	resp2, err := auth.AuthResponse(resp, req, conn, pxy.Cfg)
+	resp2, err := auth.AuthResponse(resp, req, conn, pxy.Cfg, sandNumber)
 	if err != nil {
 		return fmt.Errorf("auth response err: %s", err)
 	}
