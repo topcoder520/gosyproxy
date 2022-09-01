@@ -35,7 +35,23 @@ func NewHttpProxy(cfg *config.Cfg) (*Proxy, error) {
 		Cfg:        cfg,
 	}
 	if len(proxy.HTTP_PROXY) == 0 {
-		proxy.HTTP_PROXY = proxy.getEnvAny("HTTP_PROXY", "http_proxy") //todo 解析
+		p := proxy.getEnvAny("HTTP_PROXY", "http_proxy")
+		if len(p) > 0 {
+			up, err := url.Parse(p)
+			if err != nil {
+				return nil, fmt.Errorf("proxy address unavailable,err:%s", err)
+			}
+			if len(up.Scheme) == 0 {
+				up.Scheme = "http"
+			}
+			proxy.Cfg.Proxy = fmt.Sprintf("%s://%s", up.Scheme, up.Host)
+			if up.User != nil {
+				proxy.Cfg.PxyUserName = up.User.Username()
+				proxy.Cfg.PxyPwd, _ = up.User.Password()
+			}
+			proxy.Cfg.PxyUrl = up
+			proxy.HTTP_PROXY = proxy.Cfg.Proxy
+		}
 	}
 	return proxy, nil
 }
