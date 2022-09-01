@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/topcoder520/gosyproxy/config"
 )
@@ -83,6 +84,54 @@ func NewEncryption(enc string) Encryption {
 	}
 }
 
+func EqualNotSpace(s1 string, s2 string) bool {
+	return strings.TrimSpace(s1) == strings.TrimSpace(s2)
+}
+
+///////////////
+
+var AuthPool *AuthTokenPool
+
+func init() {
+	AuthPool = &AuthTokenPool{
+		tokenPool: make(chan AuthToken, 10000),
+		duration:  5 * time.Second,
+	}
+}
+
+type AuthToken struct {
+	Token    string
+	DealLine time.Time
+}
+
+type AuthTokenPool struct {
+	tokenPool chan AuthToken
+	duration  time.Duration
+}
+
+func (pool *AuthTokenPool) Push(token string) {
+	authToken := AuthToken{}
+	authToken.Token = token
+	authToken.DealLine = time.Now().Add(pool.duration)
+	pool.tokenPool <- authToken
+}
+
+func (pool *AuthTokenPool) Pop() *AuthToken {
+	select {
+	case <-auth.AuthPool.Pop():
+
+	}
+	for authToken := range pool.tokenPool {
+		if authToken.DealLine.Before(time.Now()) {
+			continue
+		}
+		return &authToken
+	}
+	return nil
+}
+
+/////////////
+
 func AuthRequest(req *http.Request, conn net.Conn, cfg *config.Cfg) error {
 	authHeader := req.Header.Get(ProxyAuthorization)
 	resp := new(http.Response)
@@ -120,10 +169,11 @@ func AuthRequest(req *http.Request, conn net.Conn, cfg *config.Cfg) error {
 	crandNumber := strAuth[2]
 	enc := NewEncryption(strAuth[0])
 	s := enc.Encrypt(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), randNumber)
-	if s != strAuth[1] {
+	if !EqualNotSpace(s, strAuth[1]) {
 		return ErrorProxyAuthorizationError
 	}
 	respauth = enc.Encrypt(fmt.Sprintf("%s:%s", cfg.UserName, cfg.Pwd), crandNumber)
+	resp.StatusCode = http.StatusOK
 	resp.Header.Del(ProxyAuthenticate)
 	resp.Header.Add(ProxyAuthenticationInfo, respauth)
 	respByts, err := httputil.DumpResponse(resp, false)
@@ -135,4 +185,59 @@ func AuthRequest(req *http.Request, conn net.Conn, cfg *config.Cfg) error {
 		return fmt.Errorf("Write response %s error:%s", ProxyAuthenticationInfo, err)
 	}
 	return nil
+}
+
+func AuthResponse(resp *http.Response, req *http.Request, conn net.Conn, cfg *config.Cfg) (*http.Response, error) {
+	agent := resp.Header.Get(ProxyAgent)
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		return resp, nil
+	}
+	pxyAuth := resp.Header.Get(ProxyAuthenticate)
+	if len(pxyAuth) == 0 {
+		return resp, nil
+	}
+	if !strings.HasPrefix(agent, PROXY_NAME) {
+		return resp, nil
+	}
+	//md5,sha1,mix/rand
+	strArr := strings.Split(pxyAuth, "/")
+	if len(strArr) != 2 {
+		return nil, errors.New(fmt.Sprintf("Read request %s error", ProxyAuthenticate))
+	}
+	algorithms := strings.Split(strArr[0], ",")
+	if len(algorithms) == 0 {
+		return nil, errors.New(fmt.Sprintf("Read request %s error", ProxyAuthenticate))
+	}
+	var reauth string
+	srandNumber := strArr[1]
+	rand.Seed(time.Now().Unix())
+	n := rand.Intn(len(algorithms))
+	algorithm := algorithms[n] //随机选算法
+	enc := NewEncryption(algorithm)
+	reauth = enc.Encrypt(fmt.Sprintf("%s:%s", cfg.PxyUserName, cfg.PxyPwd), srandNumber)
+	//md5 md5str rand
+	sandNumber := Rand()
+	req.Header.Set(ProxyAuthorization, fmt.Sprintf("%s %s %s", algorithm, reauth, strconv.Itoa(sandNumber)))
+	if err := req.Write(conn); err != nil {
+		return nil, err
+	}
+	//very server
+	resp2, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		return nil, err
+	}
+	pxyAuthInfo := resp2.Header.Get(ProxyAuthenticationInfo)
+	if len(pxyAuthInfo) == 0 {
+		return nil, fmt.Errorf("read request %s error:%s", ProxyAuthenticationInfo, err)
+	}
+	reauth = enc.Encrypt(fmt.Sprintf("%s:%s", cfg.PxyUserName, cfg.PxyPwd), strconv.Itoa(sandNumber))
+	if !EqualNotSpace(reauth, pxyAuthInfo) {
+		return nil, fmt.Errorf("proxy server verification failed")
+	}
+	//等待代理返回隧道是否连接成功
+	resp2, err = http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		return nil, err
+	}
+	return resp2, nil
 }

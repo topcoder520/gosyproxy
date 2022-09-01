@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"time"
 
@@ -139,7 +138,13 @@ func (pxy *Proxy) forward(resp http.ResponseWriter, req *http.Request) {
 		err = auth.AuthRequest(req, connIn, pxy.Cfg)
 		if err != nil {
 			mylog.Println("Proxy Authorization fail,err:", err)
-			connIn.Write([]byte("Proxy Authorization fail")) //todo
+			resp := new(http.Response)
+			resp.Header = make(http.Header)
+			resp.Header.Add(auth.ProxyAgent, fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version))
+			resp.StatusCode = http.StatusNonAuthoritativeInfo
+			resp.ContentLength = 0
+			respByts, _ := httputil.DumpResponse(resp, false)
+			connIn.Write(respByts)
 			return
 		}
 	}
@@ -215,67 +220,29 @@ func (pxy *Proxy) connectProxyServer(conn net.Conn, addr string) error {
 		Header:     make(http.Header),
 	}
 	req.Header.Set("Proxy-Connection", "keep-alive")
+
+	select {
+	case token := <-auth.AuthPool.Pop():
+
+	}
+
 	req.Header.Add(auth.ProxyAuthorization, "") //todo
 	req.Header.Add(auth.ProxyAgent, fmt.Sprintf("%s/%s", auth.PROXY_NAME, auth.Version))
 
 	if err := req.Write(conn); err != nil {
-		return err
+		return fmt.Errorf("write request err:%s", err)
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
-		return err
+		return fmt.Errorf("read response err:%s", err)
 	}
-	agent := resp.Header.Get(auth.ProxyAgent)
-	if strings.HasPrefix(agent, auth.PROXY_NAME) {
-		pxyAuth := resp.Header.Get(auth.ProxyAuthenticate)
-		if len(pxyAuth) > 0 {
-			//md5,sha1,mix/rand
-			strArr := strings.Split(pxyAuth, "/")
-			if len(strArr) != 2 {
-				return errors.New(fmt.Sprintf("Read request %s error:%s", auth.ProxyAuthenticate, err))
-			}
-			algorithms := strings.Split(strArr[0], ",")
-			if len(algorithms) == 0 {
-				return errors.New(fmt.Sprintf("Read request %s error:%s", auth.ProxyAuthenticate, err))
-			}
-			var reauth string
-			srandNumber := strArr[1]
-			rand.Seed(time.Now().Unix())
-			n := rand.Intn(len(algorithms))
-			algorithm := algorithms[n] //随机选算法
-			enc := auth.NewEncryption(algorithm)
-			reauth = enc.Encrypt(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), srandNumber)
-			//md5 md5str rand
-			sandNumber := auth.Rand()
-			req.Header.Set(auth.ProxyAuthorization, fmt.Sprintf("%s %s %s", algorithm, reauth, strconv.Itoa(sandNumber)))
-			if err := req.Write(conn); err != nil {
-				return err
-			}
-
-			//very server
-			resp, err = http.ReadResponse(bufio.NewReader(conn), req)
-			if err != nil {
-				return err
-			}
-			pxyAuthInfo := resp.Header.Get(auth.ProxyAuthenticationInfo)
-			if len(pxyAuthInfo) == 0 {
-				return fmt.Errorf("read request %s error:%s", auth.ProxyAuthenticationInfo, err)
-			}
-			reauth = enc.Encrypt(fmt.Sprintf("%s:%s", pxy.Cfg.PxyUserName, pxy.Cfg.PxyPwd), strconv.Itoa(sandNumber))
-			if reauth != pxyAuthInfo {
-				return fmt.Errorf("proxy server verification failed")
-			}
-
-			//等待代理返回隧道是否连接成功
-			resp, err = http.ReadResponse(bufio.NewReader(conn), req)
-			if err != nil {
-				return err
-			}
-		}
+	resp2, err := auth.AuthResponse(resp, req, conn, pxy.Cfg)
+	if err != nil {
+		return fmt.Errorf("auth response err: %s", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return errors.New(resp.Status)
+	if resp2.StatusCode != http.StatusOK {
+		return errors.New("StatusCode != http.StatusOK => " + resp2.Status)
 	}
 	return nil
 }
